@@ -355,11 +355,11 @@ function plot_on_sphere(P; title="Case", nsphere=60, show_start=true, show_end=t
 
     plt = surface(
         X, Y, Z;
-        alpha = 0.3,                 # un poco más sólida
+        alpha = 0.3,
         colorbar = false,
-        seriescolor = RGB(0.85,0.85,0.85),  # gris uniforme elegante
-        linewidth = 0.3,              # líneas suaves del mesh
-        linecolor = :white,           # borde sutil blanco
+        seriescolor = RGB(0.85,0.85,0.85),
+        linewidth = 0.3,
+        linecolor = :white,
         label = "",
         title = title,
         xlims = (-1,1), ylims = (-1,1), zlims = (-1,1),
@@ -367,10 +367,10 @@ function plot_on_sphere(P; title="Case", nsphere=60, show_start=true, show_end=t
         legend = :outerright
     )
 
-    # Trajectory (red)
+    # Trajectory
     plot!(plt, P[:,1], P[:,2], P[:,3]; lw=4, color=:red, label="p(t)")
 
-    # Start/end points (keep default)
+    # Start/end points
     if show_start
         scatter!(plt, [P[1,1]], [P[1,2]], [P[1,3]]; markersize=3, label="t0")
     end
@@ -378,7 +378,7 @@ function plot_on_sphere(P; title="Case", nsphere=60, show_start=true, show_end=t
         scatter!(plt, [P[end,1]], [P[end,2]], [P[end,3]]; markersize=3, label="tf")
     end
 
-    # Axes lines (black)
+    # Axes lines
     if show_axes
         plot!(plt, [-1,1], [0,0], [0,0]; lw=3, color=:black, label="")
         plot!(plt, [0,0], [-1,1], [0,0]; lw=3, color=:black, label="")
