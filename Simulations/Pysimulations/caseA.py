@@ -25,7 +25,7 @@ def main():
     t_eval = np.linspace(t0, tf, 4000)
 
     # Jeffery int
-    t, D = jf.integrate_director_vector(d0, (t0, tf), t_eval, E, W, lam)
+    t, D, norm_raw = jf.integrate_director_vector(d0, (t0, tf), t_eval, E, W, lam)
 
     d1, d2, d3 = D[:, 0], D[:, 1], D[:, 2]
 
@@ -57,9 +57,9 @@ def main():
     axs[1, 0].grid(True)
     axs[1, 0].legend()
 
-    # Norma (después de normalize_rows será ~1; sirve como check)
-    norm = np.linalg.norm(D, axis=1)
-    axs[1, 1].plot(t, norm, label=r"$\|d\|$")
+    # N
+    axs[1, 1].plot(t, norm_raw, label=r"$\|d\|$ (raw)")
+    axs[1, 1].set_yscale("log") 
     axs[1, 1].set_xlabel("t")
     axs[1, 1].set_ylabel(r"$\|d\|$")
     axs[1, 1].grid(True)

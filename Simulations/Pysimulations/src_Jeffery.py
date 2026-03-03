@@ -78,6 +78,8 @@ def integrate_director_vector(
         atol=atol
     )
 
-    P = sol.y.T  # (N,3)
-    P = normalize_rows(P)
-    return sol.t, P
+    P_raw = sol.y.T  # (N,3)
+    norm_raw = np.linalg.norm(P_raw, axis=1)
+
+    P = normalize_rows(P_raw)
+    return sol.t, P, norm_raw
