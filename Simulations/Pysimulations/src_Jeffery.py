@@ -67,7 +67,7 @@ def integrate_director_vector(
     lam: float,
     rtol: float = 1e-9,
     atol: float = 1e-12
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray,np.ndarray]:
 
     sol = solve_ivp(
         fun=lambda t, p: jeffery_rhs_vector(t, p, E, W, lam),
@@ -83,3 +83,51 @@ def integrate_director_vector(
 
     P = normalize_rows(P_raw)
     return sol.t, P, norm_raw
+
+ 
+#returns [dtheta/dt, dphi/dt]
+def jeffery_rhs_theta_phi(t: float, y: np.ndarray, E: np.ndarray, W: np.ndarray, B: float) -> np.ndarray:
+   
+    theta, phi = y
+
+    # unitary vector
+    d = sph_to_vec(theta, phi)
+    d_dot = jeffery_rhs_vector(t, d, E, W, B)
+
+    # d3' = -theta'sin(theta) -> thta'=-d3'/sin(theta)
+    sin_th = np.sin(theta)
+    eps = 1e-12
+    if abs(sin_th) < eps:
+        theta_dot = 0.0
+        phi_dot = 0.0
+        return np.array([theta_dot, phi_dot], dtype=float)
+
+    theta_dot = -d_dot[2] / sin_th
+
+    # d1 * d2' - d1' * d2 = phi' sin^2(theta)
+    sin2 = sin_th * sin_th
+    phi_dot = (d[0] * d_dot[1] - d_dot[0] * d[1]) / sin2
+
+    return np.array([theta_dot, phi_dot], dtype=float)
+
+
+def integrate_theta_phi(
+    y0: np.ndarray,
+    t_span: tuple[float, float],
+    t_eval: np.ndarray,
+    E: np.ndarray,
+    W: np.ndarray,
+    B: float,
+    rtol: float = 1e-9,
+    atol: float = 1e-12
+) -> tuple[np.ndarray, np.ndarray]:
+    sol = solve_ivp(
+        fun=lambda t, y: jeffery_rhs_theta_phi(t, y, E, W, B),
+        t_span=t_span,
+        y0=np.asarray(y0, dtype=float),
+        t_eval=t_eval,
+        rtol=rtol,
+        atol=atol
+    )
+    Y = sol.y.T  # (N,2)
+    return sol.t, Y
