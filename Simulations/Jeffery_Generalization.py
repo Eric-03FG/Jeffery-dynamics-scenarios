@@ -43,7 +43,6 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 import pyvista as pv
 
-
 # =============================================================================
 # 1. FUNCIONES AUXILIARES
 # =============================================================================
@@ -111,7 +110,73 @@ def unwrap_angle_deg(angle_deg):
     """
     return np.rad2deg(np.unwrap(np.deg2rad(angle_deg)))
 
+def wrap_angle_deg(angle_deg):
+    """
+    Lleva un ángulo en grados al intervalo [-180, 180].
+    """
+    return (angle_deg + 180.0) % 360.0 - 180.0
 
+def get_velocity_plane(case):
+    if case in ["shear_xy", "extensional_xy", "rotation_z"]:
+        return "xy"
+    elif case in ["shear_xz", "mixed_shear_stretch"]:
+        return "xz"
+    else:
+        return "xy"
+    
+def build_velocity_field_on_plane(A, plane="xy", n=10, lim=1.0):
+    grid = np.linspace(-lim, lim, n)
+
+    points = []
+    vectors = []
+
+    for a in grid:
+        for b in grid:
+            if plane == "xy":
+                X = np.array([a, b, 0.0])
+            elif plane == "xz":
+                X = np.array([a, 0.0, b])
+            elif plane == "yz":
+                X = np.array([0.0, a, b])
+            else:
+                raise ValueError("plane debe ser 'xy', 'xz' o 'yz'")
+
+            u = A @ X
+            points.append(X)
+            vectors.append(u)
+
+    points = np.array(points)
+    vectors = np.array(vectors)
+    return points, vectors
+
+def get_flow_latex(case, flow_params):
+    if case == "shear_xy":
+        gamma = flow_params.get("gamma", 1.0)
+        return rf"$\mathbf{{u}} = ({gamma} y,\; 0,\; 0)$"
+
+    elif case == "shear_xz":
+        gamma = flow_params.get("gamma", 1.0)
+        return rf"$\mathbf{{u}} = ({gamma} z,\; 0,\; 0)$"
+
+    elif case == "extensional_xy":
+        eps = flow_params.get("epsilon_dot", 1.0)
+        return rf"$\mathbf{{u}} = ({eps} x,\; -{eps} y,\; 0)$"
+
+    elif case == "rotation_z":
+        omega = flow_params.get("omega", 1.0)
+        return rf"$\mathbf{{u}} = (-{omega} y,\; {omega} x,\; 0)$"
+
+    elif case == "mixed_shear_stretch":
+        gamma = flow_params.get("gamma", 1.0)
+        s = flow_params.get("s", 0.1)
+        return rf"$\mathbf{{u}} = ({s} x + {gamma} z,\; -{s} y,\; 0)$"
+
+    elif case == "custom":
+        return r"$\mathbf{u} = \mathbf{A}\mathbf{x}$"
+
+    else:
+        return r"$\mathbf{u} = \mathbf{A}\mathbf{x}$"
+    
 # =============================================================================
 # 2. CAMPOS DE FLUJO PREDEFINIDOS
 # =============================================================================
@@ -256,8 +321,8 @@ def jeffery_rhs(t, p, beta, A):
 def run_case(
     case="shear_xy",
     r=5.0,
-    theta0=1.1,
-    phi0=0.3,
+    theta0_deg=63.0,
+    phi0_deg=17.0,
     t_final=40.0,
     n_points=4000,
     flow_params=None,
@@ -268,9 +333,15 @@ def run_case(
 ):
     """
     Interfaz principal para correr un caso determinista de Jeffery.
+
+    IMPORTANTE:
+    - theta0_deg y phi0_deg se ingresan en grados.
     """
     if flow_params is None:
         flow_params = {}
+
+    theta0 = np.deg2rad(theta0_deg)
+    phi0 = np.deg2rad(phi0_deg)
 
     beta = bretherton_parameter(r)
     p0 = p_from_angles(theta0, phi0)
@@ -321,8 +392,10 @@ def run_case(
         "norms": norms,
         "beta": beta,
         "aspect_ratio": r,
-        "theta0": theta0,
-        "phi0": phi0,
+        "theta0_rad": theta0,
+        "phi0_rad": phi0,
+        "theta0_deg": theta0_deg,
+        "phi0_deg": phi0_deg,
         "t_final": t_final,
         "flow_params": flow_params,
         "solver_result": sol
@@ -336,13 +409,6 @@ def run_case(
 # =============================================================================
 
 def plot_jeffery_4subplots(result, use_unwrapped_phi=True, figsize=(12, 8)):
-    """
-    Genera una figura con 4 subplots:
-      1) p_x, p_y, p_z vs tiempo
-      2) theta vs tiempo [grados]
-      3) phi vs tiempo [grados]
-      4) ||p|| vs tiempo
-    """
     t = result["t"]
     theta_deg = result["theta_deg"]
     phi_deg = result["phi_deg_unwrapped"] if use_unwrapped_phi else result["phi_deg_wrapped"]
@@ -389,7 +455,6 @@ def plot_jeffery_4subplots(result, use_unwrapped_phi=True, figsize=(12, 8)):
     plt.tight_layout()
     return fig, axs
 
-
 # =============================================================================
 # 6. VISUALIZACIÓN 3D INTERACTIVA NATIVA CON PYVISTA
 # =============================================================================
@@ -402,38 +467,38 @@ def plot_trajectory_on_sphere_interactive(
     show_grid=True,
     sphere_opacity=0.22
 ):
-    """
-    Abre una ventana 3D interactiva nativa con PyVista, sin navegador.
 
-    Parámetros
-    ----------
-    result : dict
-        Resultado devuelto por run_case(...)
+    def format_vector(v):
+        return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
 
-    title : str o None
-        Título mostrado en la ventana.
+    def print_state_block(name, p):
+        p = normalize_vector(p)
+        theta, phi = angles_from_p(p)
+        r = vector_norm(p)
 
-    screenshot_path : str
-        Ruta del archivo PNG para guardar screenshot.
+        theta_deg = np.degrees(theta)
+        phi_deg = np.degrees(phi)
 
-    save_screenshot : bool
-        Si es True, guarda una captura automáticamente.
+        if phi_deg < 0:
+            phi_deg += 360.0
 
-    show_grid : bool
-        Si es True, muestra una caja/ejes de referencia elegantes.
+        print(f"  {name}")
+        print("  " + "─" * 52)
+        print(f"    Vector cartesiano : {format_vector(p)}")
+        print(f"    Norma             : {r:.4f}")
+        print(f"    θ (polar)         : {theta_deg:.4f}°")
+        print(f"    φ (azimutal)      : {phi_deg:.4f}°")
+        print()
 
-    sphere_opacity : float
-        Opacidad de la esfera unitaria.
-    """
+        return theta_deg, phi_deg
+
     P = result["P"]
     case = result["case"]
 
     if title is None:
-        title = rf"$\mathbf{{p}}(t)$ orbit on $S^2$  |  {case}"
+        flow_latex = get_flow_latex(case, result["flow_params"])
+        title = rf"$\mathbf{{p}}(t)\ \mathrm{{on}}\ S^2$" + "\n" + flow_latex
 
-    # -------------------------------------------------------------------------
-    # Crear ventana
-    # -------------------------------------------------------------------------
     plotter = pv.Plotter(window_size=(1000, 780))
     plotter.set_background("white")
 
@@ -451,7 +516,7 @@ def plot_trajectory_on_sphere_interactive(
     )
 
     # -------------------------------------------------------------------------
-    # Trayectoria de p(t)
+    # Trayectoria
     # -------------------------------------------------------------------------
     polyline = pv.lines_from_points(P)
     plotter.add_mesh(
@@ -462,43 +527,86 @@ def plot_trajectory_on_sphere_interactive(
     )
 
     # -------------------------------------------------------------------------
-    # Punto inicial y final
+    # Vectores inicial y final
     # -------------------------------------------------------------------------
-    p_start = P[0]
-    p_end = P[-1]
+    p_start = normalize_vector(P[0])
+    p_end = normalize_vector(P[-1])
 
+    # -------------------------------------------------------------------------
+    # Impresión en consola
+    # -------------------------------------------------------------------------
+    print()
+    print("╔" + "═" * 58 + "╗")
+    print("║{:^58s}║".format("JEFFERY ORBIT — ORIENTACIONES"))
+    print("╚" + "═" * 58 + "╝")
+    print(f"  Caso: {case}")
+    print()
+
+    theta0_deg, phi0_deg = print_state_block("t0  (estado inicial)", p_start)
+    thetaf_deg, phif_deg = print_state_block("tf  (estado final)", p_end)
+
+    # ---------------------------------------------------------------------
+    # Cambios angulares
+    # ---------------------------------------------------------------------
+    delta_theta = thetaf_deg - theta0_deg
+
+    # usar unwrap para evitar saltos de 360°
+    phi_series = np.array([phi0_deg, phif_deg])
+    phi_unwrapped = unwrap_angle_deg(phi_series)
+    delta_phi = phi_unwrapped[1] - phi_unwrapped[0]
+
+    print("  Cambios angulares")
+    print("  " + "─" * 52)
+    print(f"    Δθ (polar)        : {delta_theta:.4f}°")
+    print(f"    Δφ (azimutal)     : {delta_phi:.4f}°")
+    print()
+
+    # Puntos
     start = pv.PolyData(p_start.reshape(1, 3))
     end = pv.PolyData(p_end.reshape(1, 3))
 
     plotter.add_mesh(
         start,
         color="green",
-        point_size=16,
-        render_points_as_spheres=True,
-        label="t0"
+        point_size=8,
+        render_points_as_spheres=True
     )
 
     plotter.add_mesh(
         end,
         color="blue",
-        point_size=16,
-        render_points_as_spheres=True,
-        label="tf"
-    )
-
-    # Etiquetas visuales junto a los puntos
-    plotter.add_point_labels(
-        np.array([p_start, p_end]),
-        ["t0", "tf"],
-        font_size=18,
-        point_size=0,
-        text_color="black",
-        shape=None,
-        margin=0
+        point_size=8,
+        render_points_as_spheres=True
     )
 
     # -------------------------------------------------------------------------
-    # Ejes más bonitos
+    # Flechas desde el origen hasta casi tocar la esfera
+    # -------------------------------------------------------------------------
+    arrow_length = 0.98
+
+    arrow_t0 = pv.Arrow(
+        start=(0.0, 0.0, 0.0),
+        direction=p_start,
+        tip_length=0.22,
+        tip_radius=0.05,
+        shaft_radius=0.018,
+        scale=arrow_length
+    )
+
+    arrow_tf = pv.Arrow(
+        start=(0.0, 0.0, 0.0),
+        direction=p_end,
+        tip_length=0.22,
+        tip_radius=0.05,
+        shaft_radius=0.018,
+        scale=arrow_length
+    )
+
+    plotter.add_mesh(arrow_t0, color="green")
+    plotter.add_mesh(arrow_tf, color="blue")
+
+    # -------------------------------------------------------------------------
+    # Ejes
     # -------------------------------------------------------------------------
     plotter.add_axes(
         line_width=3,
@@ -508,8 +616,7 @@ def plot_trajectory_on_sphere_interactive(
         ambient=0.5,
         xlabel="x",
         ylabel="y",
-        zlabel="z",
-        labels_off=False
+        zlabel="z"
     )
 
     if show_grid:
@@ -521,15 +628,14 @@ def plot_trajectory_on_sphere_interactive(
             xtitle="x",
             ytitle="y",
             ztitle="z",
-            font_size=12
+            font_size=18
         )
 
     # -------------------------------------------------------------------------
-    # Texto
+    # Texto y leyenda
     # -------------------------------------------------------------------------
-    plotter.add_text(title, font_size=12, position="upper_left", color="black")
+    plotter.add_text(title, font_size=15, position="upper_left", color="black")
 
-    # Leyenda visual
     plotter.add_legend(
         labels=[
             [r"$\mathbf{p}(t)$", "red"],
@@ -543,25 +649,47 @@ def plot_trajectory_on_sphere_interactive(
     )
 
     # -------------------------------------------------------------------------
+    # CAMPO DE VELOCIDAD u = A x
+    # -------------------------------------------------------------------------
+    A = result["A"]
+    case = result["case"]
+
+    if case in ["shear_xy", "extensional_xy", "rotation_z"]:
+        plane = "xy"
+    elif case in ["shear_xz", "mixed_shear_stretch"]:
+        plane = "xz"
+    else:
+        plane = "xy"
+
+    points, vectors = build_velocity_field_on_plane(A, plane=plane, n=11, lim=1.0)
+
+    mesh = pv.PolyData(points)
+    mesh["velocity"] = vectors
+
+    glyphs = mesh.glyph(
+        orient="velocity",
+        scale="velocity",
+        factor=0.3
+    )
+
+    plotter.add_mesh(glyphs, color="black")
+
+    # -------------------------------------------------------------------------
     # Cámara
     # -------------------------------------------------------------------------
     plotter.camera_position = "iso"
     plotter.camera.zoom(1.15)
 
     # -------------------------------------------------------------------------
-    # Guardar screenshot automáticamente (antes o durante show)
+    # Screenshot automático
     # -------------------------------------------------------------------------
     if save_screenshot:
-        # render previo para asegurar captura correcta
         plotter.show(auto_close=False, interactive_update=False)
         plotter.screenshot(screenshot_path)
-        print(f"Screenshot guardado en: {screenshot_path}")
-
-        # mantener abierta la ventana interactiva
+        print(f"  Screenshot guardado en: {screenshot_path}")
         plotter.show()
     else:
         plotter.show()
-
 
 # =============================================================================
 # 7. SWITCHES
@@ -570,15 +698,17 @@ def plot_trajectory_on_sphere_interactive(
 if __name__ == "__main__":
 
     # CASE = "shear_xy"
-    CASE = "shear_xz"
+    # CASE = "shear_xz"
     # CASE = "extensional_xy"
-    # CASE = "rotation_z"
+    CASE = "rotation_z"
     # CASE = "mixed_shear_stretch"
     # CASE = "custom"
 
-    r = 50/7 # Monoraphidium griffithii
-    theta0 = 15
-    phi0 = 60
+    r = 50 / 7  # Monoraphidium griffithii
+
+    theta0_deg = 70.0
+    phi0_deg = 35.0
+
     t_final = 80.0
     n_points = 4000
 
@@ -598,16 +728,15 @@ if __name__ == "__main__":
     result = run_case(
         case=CASE,
         r=r,
-        theta0=theta0,
-        phi0=phi0,
+        theta0_deg=theta0_deg,
+        phi0_deg=phi0_deg,
         t_final=t_final,
         n_points=n_points,
         flow_params=flow_params,
         grad_u_custom=grad_u_custom
     )
-
+    
     fig, axs = plot_jeffery_4subplots(result, use_unwrapped_phi=True, figsize=(12, 8))
     plt.show()
 
-    # Esto abre una ventana 3D nativa
     plot_trajectory_on_sphere_interactive(result)
