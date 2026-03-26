@@ -1,11 +1,43 @@
 # =============================================================================
-# JEFFERY GENERALIZADO EN PYTHON
-# Determinista + Estocástico (Langevin / Euler-Maruyama)
+# JEFFERY DETERMINISTA + ESTOCÁSTICO (Langevin / Euler-Maruyama)
 # -----------------------------------------------------------------------------
-# Basado en tu script actual, extendido para incluir:
+# Este script:
+#
+#   1) Resuelve la ecuación de Jeffery en forma vectorial:
+#
+#        p_dot = W p + beta * (E p - (p^T E p) p)
+#
+#      donde:
+#        E = (A + A^T)/2
+#        W = (A - A^T)/2
+#        A = grad(u) = ∇u
+#
+#   2) Permite usar campos de flujo predefinidos:
+#        - shear_xy
+#        - shear_xz
+#        - extensional_xy
+#        - rotation_z
+#        - mixed_shear_stretch
+#        - custom
+#
+#   3) Recibe condiciones iniciales en coordenadas esféricas (theta0, phi0),
+#      las convierte a cartesianas y resuelve para p(t).
+#
+#   4) Calcula beta a partir del aspect ratio r:
+#
+#        beta = (r^2 - 1)/(r^2 + 1)
+#
+#   5) Grafica en una sola figura con 4 subplots:
+#       - p_x, p_y, p_z vs t
+#       - theta vs t [grados]
+#       - phi vs t [grados]
+#       - ||p|| vs t
+#
+#   6) Genera una figura interactiva 3D NATIVA con PyVista
+#      con la esfera unitaria y la trayectoria.
+#
+# -----------------------------------------------------------------------------
 #   - MODE = "deterministic" o "stochastic"
-#   - integración estocástica sobre p(t) en S^2
-#   - inclusión de D en títulos/figuras del caso estocástico
 # =============================================================================
 
 import numpy as np
