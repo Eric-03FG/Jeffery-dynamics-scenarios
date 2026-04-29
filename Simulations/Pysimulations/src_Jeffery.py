@@ -1,5 +1,7 @@
 import numpy as np
 from scipy.integrate import solve_ivp
+import matplotlib.pyplot as plt
+ 
 
 #Velocity gradient 3x3 matrix G= nabla u, G[i, j] =du_x/dx_j. (x,y,z).
 def grad_u_simple_shear(gamma: float, plane: str) -> np.ndarray:
@@ -131,3 +133,181 @@ def integrate_theta_phi(
     )
     Y = sol.y.T  # (N,2)
     return sol.t, Y
+
+#Extensional flow
+def grad_u_extensional(epsilon_dot: float, plane: str) -> np.ndarray:
+    G = np.zeros((3,3), dtype=float)
+    if plane == "xy":
+        G[0,0]= epsilon_dot
+        G[1,1]=-epsilon_dot
+    elif plane == "xz":
+        G[0,0]= epsilon_dot
+        G[2,2]=-epsilon_dot
+    elif plane == "yz":
+        G[1,1] = epsilon_dot
+        G[2,2] = -epsilon_dot
+    else:
+        raise ValueError("plane must be 'xy', 'xz' or 'yz'")
+    return G
+
+#Rigid rotation, all contribution is in the antisimetric part
+def grad_u_rotation(omega: float, plane: str) -> np.ndarray:
+    G = np.zeros((3,3),dtype=float)
+    if plane == "xy": # u = (-omega*y, omega*x,0), rotates around z
+        G[0,1]=-omega
+        G[1,0]=omega
+    elif plane == "xz": # u = (omega*z,0, -omega*x), rotates around y
+        G[0,2] = omega
+        G[2,0] = -omega
+    elif plane == "yz": # u = (0,-omega*z, omega*y), rotates around x
+        G[1,2] = -omega
+        G[2,1] = omega
+    else:
+        raise ValueError("plane must be 'xy', 'xz' or 'yz'")
+    return G
+
+#mixed flow shear + stretching
+def grad_u_mixed_shear_stretch(gamma: float, s: float) -> np.ndarray: 
+    G=np.zeros((3,3), dtype=float)
+    G[0,0] = s
+    G[1,1]= -s
+    G[0,2] = gamma
+    return G
+
+#Normalize a 3D vector, n =||v|| 
+def normalize_vector(v: np.ndarray) -> np.ndarray:
+    v = np.asarray(v, dtype=float)
+    n = np.linalg.norm(v)
+    if n < 1e-15:
+        raise ValueError("Too close to 0")
+    return v/n
+
+#continuous angles in radians
+def unwrap_angle_rad(angle_rad:np.ndarray) -> np.ndarray:
+    return np.unwrap(np.asarray(angle_rad, dtype=float))
+
+#continuous angles in degrees
+def unwrap_angle_deg(angle_deg:np.ndarray) -> np.ndarray:
+    return np.rad2deg(np.unwrap(np.deg2rad(np.asarray(angle_deg, dtype=float))))
+
+#converts directors P of (N,3) to angles
+def directors_to_angles(P:np.ndarray):
+    P=np.asarray(P, dtype=float)
+    d1 = P[:,0]
+    d2 = P[:,1]
+    d3 = P[:,2]
+
+    theta_rad = np.arccos(np.clip(d3,-1.0,1.0))
+    phi_rad_wrapped = np.arctan2(d2,d1)
+    phi_rad_unwrapped = np.unwrap(phi_rad_wrapped)
+
+    return theta_rad, phi_rad_wrapped, phi_rad_unwrapped
+
+
+def optical_angular_velocity_effective(
+    p: np.ndarray,
+    e_pol: np.ndarray = None,
+    lambda_opt: float = 0.0
+) -> np.ndarray:
+    """
+
+    Model:
+        U(p) = -(1/2) * Delta_alpha * E0^2 * (p · e_pol)^2
+
+    Uses:
+
+        lambda_opt   [1/s]
+
+    Effective angular velocity:
+
+        Omega_opt = lambda_opt * (p · e_pol) * (p x e_pol)
+
+    Where:
+        - p      : unit vector
+        - e_pol  : unidirectional linear polarization
+        - lambda_opt > 0 promotes alignment with ± e_pol
+
+    Interpretation:
+    - If p is already aligned with e_pol, then p x e_pol = 0
+      and there is no additional optical rotation.
+    - If p is tilted, an effective rotation occurs that tends
+      to align p with the polarization direction.
+
+    Parameters:
+    - p: direction vector.
+    - e_pol: Polarization direction. If None: x = (1,0,0).
+    - lambda_opt: effective optical alignment intensity [1/s].
+
+    Return:
+    - Omega_opt: Effective angular velocity.
+    """
+    p = normalize_vector(np.asarray(p, dtype=float))
+
+    if e_pol is None:
+        e_pol = np.array([1.0, 0.0, 0.0], dtype=float)
+    e_pol = normalize_vector(np.asarray(e_pol, dtype=float))
+
+    c = float(np.dot(p, e_pol))
+    Omega_opt = lambda_opt * c * np.cross(p, e_pol)
+    return Omega_opt
+
+def optical_alignment_drift(
+    p: np.ndarray,
+    e_pol: np.ndarray = None,
+    lambda_opt: float = 0.0
+) -> np.ndarray:
+    """
+    Devuelve la contribución óptica directa a p_dot.
+
+    uses:
+        p_dot_opt = Omega_opt x p
+
+    with:
+        Omega_opt = lambda_opt * (p · e_pol) * (p x e_pol)
+
+    gets:
+
+        p_dot_opt = lambda_opt * (p·e_pol) * [ e_pol - (p·e_pol) p ]
+
+    """
+    p = normalize_vector(np.asarray(p, dtype=float))
+
+    Omega_opt = optical_angular_velocity_effective(
+        p=p,
+        e_pol=e_pol,
+        lambda_opt=lambda_opt
+    )
+
+    p_dot_opt = np.cross(Omega_opt, p)
+    return p_dot_opt
+
+
+def jeffery_rhs_vector_optical(
+    t: float,
+    d: np.ndarray,
+    E: np.ndarray,
+    W: np.ndarray,
+    lam: float,
+    e_pol: np.ndarray = None,
+    lambda_opt: float = 0.0
+) -> np.ndarray:
+    """
+    right-hand side of the angular momentum equation:
+
+        d_dot = d_dot_Jeffery + d_dot_opt
+
+    Where:
+        d_dot_Jeffery = W d + lam (E d - (d^T E d) d)
+        d_dot_opt     = optical_alignment_drift(...)
+
+    """
+    d = normalize_vector(np.asarray(d, dtype=float))
+
+    d_dot_jeffery = jeffery_rhs_vector(t, d, E, W, lam)
+    d_dot_opt = optical_alignment_drift(
+        p=d,
+        e_pol=e_pol,
+        lambda_opt=lambda_opt
+    )
+
+    return d_dot_jeffery + d_dot_opt

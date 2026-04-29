@@ -42,6 +42,9 @@ import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 import pyvista as pv
+import os
+from pathlib import Path
+from datetime import datetime
 
 # =============================================================================
 # 1. FUNCIONES AUXILIARES
@@ -333,9 +336,6 @@ def run_case(
 ):
     """
     Interfaz principal para correr un caso determinista de Jeffery.
-
-    IMPORTANTE:
-    - theta0_deg y phi0_deg se ingresan en grados.
     """
     if flow_params is None:
         flow_params = {}
@@ -408,7 +408,15 @@ def run_case(
 # 5. GRÁFICA 2x2
 # =============================================================================
 
-def plot_jeffery_4subplots(result, use_unwrapped_phi=True, figsize=(12, 8)):
+def plot_jeffery_4subplots(
+    result,
+    flow_params=None,
+    use_unwrapped_phi=True,
+    figsize=(12, 8),
+    save=True,
+    folder="ResultsG",
+    filename=None
+):
     t = result["t"]
     theta_deg = result["theta_deg"]
     phi_deg = result["phi_deg_unwrapped"] if use_unwrapped_phi else result["phi_deg_wrapped"]
@@ -416,43 +424,90 @@ def plot_jeffery_4subplots(result, use_unwrapped_phi=True, figsize=(12, 8)):
     r = result["aspect_ratio"]
     case = result["case"]
 
+    # ------------------------------------------------------------------
+    # Campo de flujo en LaTeX
+    # ------------------------------------------------------------------
+    flow_latex = get_flow_latex(case, flow_params or {})
+
+    # ------------------------------------------------------------------
+    # Crear carpeta
+    # ------------------------------------------------------------------
+    if save:
+        os.makedirs(folder, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Figura
+    # ------------------------------------------------------------------
     fig, axs = plt.subplots(2, 2, figsize=figsize)
+
     fig.suptitle(
-        f"Jeffery determinista | case = {case} | r = {r:.4f} | beta = {beta:.6f}",
+        rf"$\dot{{\mathbf{{p}}}}$ | "
+        rf"$r = {r:.2f}$, $\beta = {beta:.2f}$" "\n"
+        rf"{flow_latex}",
         fontsize=14
     )
 
+    # ------------------------------------------------------------------
+    # Subplot 1
+    # ------------------------------------------------------------------
     axs[0, 0].plot(t, result["px"], label=r"$p_x$", linewidth=2)
     axs[0, 0].plot(t, result["py"], label=r"$p_y$", linewidth=2)
     axs[0, 0].plot(t, result["pz"], label=r"$p_z$", linewidth=2)
     axs[0, 0].set_xlabel(r"$t$")
     axs[0, 0].set_ylabel(r"$\mathbf{p}(t)$")
-    axs[0, 0].set_title("Componentes de p vs tiempo")
+    axs[0, 0].set_title(r"Components of $\mathbf{p}(t)$")
     axs[0, 0].grid(True)
     axs[0, 0].legend()
 
+    # ------------------------------------------------------------------
+    # Theta
+    # ------------------------------------------------------------------
     axs[0, 1].plot(t, theta_deg, label=r"$\theta(t)$", linewidth=2)
     axs[0, 1].set_xlabel(r"$t$")
     axs[0, 1].set_ylabel(r"$\theta\ [^\circ]$")
-    axs[0, 1].set_title(r"$\theta$ vs tiempo")
+    axs[0, 1].set_title(r"$\theta(t)$")
     axs[0, 1].grid(True)
     axs[0, 1].legend()
 
+    # ------------------------------------------------------------------
+    # Phi
+    # ------------------------------------------------------------------
     axs[1, 0].plot(t, phi_deg, label=r"$\phi(t)$", linewidth=2)
     axs[1, 0].set_xlabel(r"$t$")
     axs[1, 0].set_ylabel(r"$\phi\ [^\circ]$")
-    axs[1, 0].set_title(r"$\phi$ vs tiempo")
+    axs[1, 0].set_title(r"$\phi(t)$")
     axs[1, 0].grid(True)
     axs[1, 0].legend()
 
+    # ------------------------------------------------------------------
+    # Norma
+    # ------------------------------------------------------------------
     axs[1, 1].plot(t, result["norms"], label=r"$\|\mathbf{p}\|$", linewidth=2)
     axs[1, 1].set_xlabel(r"$t$")
     axs[1, 1].set_ylabel(r"$\|\mathbf{p}\|$")
-    axs[1, 1].set_title(r"Norma de $\mathbf{p}$ vs tiempo")
+    axs[1, 1].set_title(r"$\|\mathbf{p}(t)\|$")
     axs[1, 1].grid(True)
     axs[1, 1].legend()
 
     plt.tight_layout()
+
+    # ------------------------------------------------------------------
+    # Guardado 500 dpi
+    # ------------------------------------------------------------------
+    if save:
+        if filename is None:
+            filename = f"jeffery_{case}_r{r:.3f}_beta{beta:.3f}.png"
+
+        path = os.path.join(folder, filename)
+
+        fig.savefig(
+            path,
+            dpi=500,
+            bbox_inches="tight"
+        )
+
+        print(f"\nFigura guardada en: {path}")
+
     return fig, axs
 
 # =============================================================================
@@ -462,19 +517,18 @@ def plot_jeffery_4subplots(result, use_unwrapped_phi=True, figsize=(12, 8)):
 def plot_trajectory_on_sphere_interactive(
     result,
     title=None,
-    screenshot_path="jeffery_sphere.png",
-    save_screenshot=True,
+    screenshot_path=None,
+    save_screenshot=False,
     show_grid=True,
     sphere_opacity=0.22
 ):
-
     def format_vector(v):
         return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
 
     def print_state_block(name, p):
         p = normalize_vector(p)
         theta, phi = angles_from_p(p)
-        r = vector_norm(p)
+        rnorm = vector_norm(p)
 
         theta_deg = np.degrees(theta)
         phi_deg = np.degrees(phi)
@@ -485,7 +539,7 @@ def plot_trajectory_on_sphere_interactive(
         print(f"  {name}")
         print("  " + "─" * 52)
         print(f"    Vector cartesiano : {format_vector(p)}")
-        print(f"    Norma             : {r:.4f}")
+        print(f"    Norma             : {rnorm:.4f}")
         print(f"    θ (polar)         : {theta_deg:.4f}°")
         print(f"    φ (azimutal)      : {phi_deg:.4f}°")
         print()
@@ -497,10 +551,33 @@ def plot_trajectory_on_sphere_interactive(
 
     if title is None:
         flow_latex = get_flow_latex(case, result["flow_params"])
-        title = rf"$\mathbf{{p}}(t)\ \mathrm{{on}}\ S^2$" + "\n" + flow_latex
+        r_val = r
+        beta_val = bretherton_parameter(r_val)
+        title = (
+            rf"$\mathbf{{p}}(t)\ \mathrm{{on}}\ S^2$"
+            "\n"
+            + flow_latex
+            + "\n"
+            + rf"$r = {r_val:.3f},\ \beta = {beta_val:.3f}$"
+        )
 
     plotter = pv.Plotter(window_size=(1000, 780))
     plotter.set_background("white")
+
+    # -------------------------------------------------------------------------
+    # Carpeta de screenshots
+    # -------------------------------------------------------------------------
+    results_dir = Path("ResultsG")
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    def build_filename():
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return results_dir / f"{case}_{timestamp}.png"
+
+    def save_current_screenshot():
+        filepath = Path(screenshot_path) if screenshot_path else build_filename()
+        plotter.screenshot(str(filepath))
+        print(f"\n📸 Screenshot guardado en: {filepath}")
 
     # -------------------------------------------------------------------------
     # Esfera unitaria
@@ -532,9 +609,6 @@ def plot_trajectory_on_sphere_interactive(
     p_start = normalize_vector(P[0])
     p_end = normalize_vector(P[-1])
 
-    # -------------------------------------------------------------------------
-    # Impresión en consola
-    # -------------------------------------------------------------------------
     print()
     print("╔" + "═" * 58 + "╗")
     print("║{:^58s}║".format("JEFFERY ORBIT — ORIENTACIONES"))
@@ -542,46 +616,45 @@ def plot_trajectory_on_sphere_interactive(
     print(f"  Caso: {case}")
     print()
 
+    beta = bretherton_parameter(r)
+
+    print("  Parámetros de la partícula")
+    print("  " + "─" * 52)
+    print(f"    Aspect ratio (r = a/b) : {r:.4f}")
+    print(f"    Bretherton (β)         : {beta:.6f}")
+
+    if np.isclose(beta, 0.0):
+        tipo = "Esfera (sin órbitas de Jeffery)"
+    elif beta < 0.5:
+        tipo = "Débilmente alargada"
+    elif beta < 0.9:
+        tipo = "Elipsoide prolato"
+    else:
+        tipo = "Altamente alargada (casi fibra)"
+
+    print(f"    Tipo de partícula      : {tipo}")
+    print()
+
     theta0_deg, phi0_deg = print_state_block("t0  (estado inicial)", p_start)
     thetaf_deg, phif_deg = print_state_block("tf  (estado final)", p_end)
 
-    # ---------------------------------------------------------------------
-    # Cambios angulares
-    # ---------------------------------------------------------------------
     delta_theta = thetaf_deg - theta0_deg
-
-    # usar unwrap para evitar saltos de 360°
     phi_series = np.array([phi0_deg, phif_deg])
     phi_unwrapped = unwrap_angle_deg(phi_series)
     delta_phi = phi_unwrapped[1] - phi_unwrapped[0]
 
     print("  Cambios angulares")
     print("  " + "─" * 52)
-    print(f"    Δθ (polar)        : {delta_theta:.4f}°")
-    print(f"    Δφ (azimutal)     : {delta_phi:.4f}°")
+    print(f"    Δθ (polar)         : {delta_theta:.4f}°")
+    print(f"    Δφ (azimutal)      : {delta_phi:.4f}°")
     print()
 
-    # Puntos
     start = pv.PolyData(p_start.reshape(1, 3))
     end = pv.PolyData(p_end.reshape(1, 3))
 
-    plotter.add_mesh(
-        start,
-        color="green",
-        point_size=8,
-        render_points_as_spheres=True
-    )
+    plotter.add_mesh(start, color="green", point_size=8, render_points_as_spheres=True)
+    plotter.add_mesh(end, color="blue", point_size=8, render_points_as_spheres=True)
 
-    plotter.add_mesh(
-        end,
-        color="blue",
-        point_size=8,
-        render_points_as_spheres=True
-    )
-
-    # -------------------------------------------------------------------------
-    # Flechas desde el origen hasta casi tocar la esfera
-    # -------------------------------------------------------------------------
     arrow_length = 0.98
 
     arrow_t0 = pv.Arrow(
@@ -605,9 +678,6 @@ def plot_trajectory_on_sphere_interactive(
     plotter.add_mesh(arrow_t0, color="green")
     plotter.add_mesh(arrow_tf, color="blue")
 
-    # -------------------------------------------------------------------------
-    # Ejes
-    # -------------------------------------------------------------------------
     plotter.add_axes(
         line_width=3,
         cone_radius=0.08,
@@ -631,9 +701,6 @@ def plot_trajectory_on_sphere_interactive(
             font_size=18
         )
 
-    # -------------------------------------------------------------------------
-    # Texto y leyenda
-    # -------------------------------------------------------------------------
     plotter.add_text(title, font_size=15, position="upper_left", color="black")
 
     plotter.add_legend(
@@ -652,7 +719,6 @@ def plot_trajectory_on_sphere_interactive(
     # CAMPO DE VELOCIDAD u = A x
     # -------------------------------------------------------------------------
     A = result["A"]
-    case = result["case"]
 
     if case in ["shear_xy", "extensional_xy", "rotation_z"]:
         plane = "xy"
@@ -674,22 +740,26 @@ def plot_trajectory_on_sphere_interactive(
 
     plotter.add_mesh(glyphs, color="black")
 
-    # -------------------------------------------------------------------------
-    # Cámara
-    # -------------------------------------------------------------------------
     plotter.camera_position = "iso"
     plotter.camera.zoom(1.15)
 
     # -------------------------------------------------------------------------
-    # Screenshot automático
+    # Atajos de teclado
     # -------------------------------------------------------------------------
+    plotter.add_key_event("s", save_current_screenshot)
+    plotter.add_key_event("q", lambda: plotter.close())
+
+    print("  Controles interactivos")
+    print("  " + "─" * 52)
+    print("    Presiona 's' para guardar screenshot en ResultsG/")
+    print("    Presiona 'q' para cerrar la ventana")
+    print()
+
+    # Screenshot automático opcional
     if save_screenshot:
-        plotter.show(auto_close=False, interactive_update=False)
-        plotter.screenshot(screenshot_path)
-        print(f"  Screenshot guardado en: {screenshot_path}")
-        plotter.show()
-    else:
-        plotter.show()
+        save_current_screenshot()
+
+    plotter.show(auto_close=True)
 
 # =============================================================================
 # 7. SWITCHES
@@ -700,23 +770,23 @@ if __name__ == "__main__":
     # CASE = "shear_xy"
     # CASE = "shear_xz"
     # CASE = "extensional_xy"
-    CASE = "rotation_z"
-    # CASE = "mixed_shear_stretch"
+    # CASE = "rotation_z"
+    CASE = "mixed_shear_stretch"
     # CASE = "custom"
 
-    r = 50 / 7  # Monoraphidium griffithii
+    r = 1.2  # Monoraphidium griffithii
 
-    theta0_deg = 70.0
-    phi0_deg = 35.0
+    theta0_deg = 89.9
+    phi0_deg = 90
 
-    t_final = 80.0
+    t_final = 500.0
     n_points = 4000
 
     flow_params = {
         "gamma": 1,
         "epsilon_dot": 1.0,
         "omega": 1.0,
-        "s": 1
+        "s": 0.1
     }
 
     grad_u_custom = np.array([
