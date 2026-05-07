@@ -43,6 +43,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pyvista as pv
 
+from scipy.ndimage import gaussian_filter1d
+
 
 # =============================================================================
 # 1. FUNCIONES AUXILIARES BÁSICAS
@@ -114,6 +116,14 @@ def wrap_angle_deg(angle_deg):
     """
     return (angle_deg + 180.0) % 360.0 - 180.0
 
+def vs_of_t(t, swimmer_params):
+    """
+    Velocidad propia constante del nadador.
+
+    Modelo:
+        vs(t) = vs0
+    """
+    return swimmer_params.get("vs0", 0.0)
 
 # =============================================================================
 # 2. DESCRIPCIÓN DEL PERFIL TEMPORAL DE PRESIÓN / CAUDAL
@@ -383,19 +393,23 @@ def jeffery_drift(p, beta, A):
 
 
 # =============================================================================
-# 5. CONDICIONES DE BORDE DEL CANAL
+# 5. CONDICIONES DE BORDE DEL CANAL: REFLEXIÓN EN PARED CILÍNDRICA
 # =============================================================================
 
-def project_to_cylinder_and_slide(x, p, flow_params):
+def reflect_on_cylinder_wall(x_old, x_new, p_new, flow_params):
     """
-    Proyecta la posición al interior del cilindro y elimina la componente normal
-    saliente de la orientación si la trayectoria alcanza la pared.
+    Impone una condición de reflexión especular en la pared cilíndrica.
 
-    Canal cilíndrico:
-        radio efectivo R = H/2 - wall_margin
+    Si la partícula cruza la frontera radial rho = R, se refleja la posición
+    transversal y también la componente normal de la orientación.
+
+    Canal:
+        y^2 + z^2 <= R^2
+        R = H/2 - wall_margin
     """
-    x = np.asarray(x, dtype=float).copy()
-    p = normalize_vector(np.asarray(p, dtype=float))
+    x_old = np.asarray(x_old, dtype=float).copy()
+    x_new = np.asarray(x_new, dtype=float).copy()
+    p_new = normalize_vector(np.asarray(p_new, dtype=float))
 
     H = flow_params.get("H", 2.0)
     wall_margin = flow_params.get("wall_margin", 0.0)
@@ -404,36 +418,36 @@ def project_to_cylinder_and_slide(x, p, flow_params):
     if R <= 0:
         raise ValueError("El radio efectivo del canal debe ser positivo.")
 
-    yz = x[1:3]
-    rho = np.linalg.norm(yz)
+    yz_new = x_new[1:3]
+    rho_new = np.linalg.norm(yz_new)
 
-    if rho > R:
-        n = yz / rho
+    if rho_new > R:
+        # Normal radial local en el punto de cruce aproximado
+        n = yz_new / rho_new
 
-        # Proyección geométrica a la pared cilíndrica
-        x[1:3] = R * n
+        # Reflexión geométrica de la posición transversal
+        penetration = rho_new - R
+        x_new[1:3] = yz_new - 2.0 * penetration * n
 
-        # Deslizamiento tangencial: se elimina componente normal saliente
-        p_n = p[1] * n[0] + p[2] * n[1]
-        if p_n > 0.0:
-            p[1] -= p_n * n[0]
-            p[2] -= p_n * n[1]
+        # Si por un paso grande aún queda fuera, se reescala ligeramente dentro
+        rho_ref = np.linalg.norm(x_new[1:3])
+        if rho_ref > R:
+            x_new[1:3] = (R - 1e-12) * x_new[1:3] / rho_ref
 
-            if np.linalg.norm(p) < 1e-14:
-                p = np.array([1.0, 0.0, 0.0], dtype=float)
-            else:
-                p = normalize_vector(p)
+        # Reflexión especular de la orientación:
+        # p_ref = p - 2 (p · n_3D) n_3D
+        n3 = np.array([0.0, n[0], n[1]], dtype=float)
+        p_new = p_new - 2.0 * np.dot(p_new, n3) * n3
+        p_new = normalize_vector(p_new)
 
-    return x, p
+    return x_new, p_new
 
 
-def enforce_channel_bc(x, p, flow_params):
+def enforce_channel_bc(x_old, x_new, p_new, flow_params):
     """
-    Aplica la restricción lateral del canal cilíndrico.
+    Aplica reflexión lateral en el canal cilíndrico.
     """
-    x = np.asarray(x, dtype=float).copy()
-    p = normalize_vector(np.asarray(p, dtype=float))
-    return project_to_cylinder_and_slide(x, p, flow_params)
+    return reflect_on_cylinder_wall(x_old, x_new, p_new, flow_params)
 
 
 # =============================================================================
@@ -449,7 +463,7 @@ def run_case_extended(
     t_final=40.0,
     n_points=4000,
     flow_params=None,
-    vs=0.0,
+    swimmer_params=None,
     n_substeps=5,
     renormalize_each_substep=True,
 ):
@@ -467,6 +481,9 @@ def run_case_extended(
       - aplicación de restricción del canal al final de cada subpaso
       - normalización periódica del vector de orientación
     """
+    if swimmer_params is None:
+        swimmer_params = {}
+
     if flow_params is None:
         flow_params = {}
 
@@ -487,9 +504,21 @@ def run_case_extended(
 
     if x0.shape != (3,):
         raise ValueError("x0 debe ser un vector/lista de longitud 3.")
+    
+    # Validación inicial estricta: x0 debe estar dentro del cilindro
+    H = flow_params.get("H", 2.0)
+    wall_margin = flow_params.get("wall_margin", 0.0)
+    R = 0.5 * H - wall_margin
 
-    # Aplicación inicial de la restricción geométrica
-    x0, p0 = enforce_channel_bc(x0, p0, flow_params)
+    rho0 = np.linalg.norm(x0[1:3])
+
+    if rho0 > R:
+        raise ValueError(
+            f"La posición inicial está fuera del cilindro: "
+            f"rho0 = {rho0:.6f} > R = {R:.6f}"
+        )
+
+    p0 = normalize_vector(p0)
 
     t = np.linspace(0.0, t_final, n_points)
     dt_output = t[1] - t[0]
@@ -507,7 +536,8 @@ def run_case_extended(
         u = velocity_field(x, ti, case, flow_params=flow_params)
         A = grad_u_local(x, ti, case, flow_params=flow_params)
 
-        x_dot = u + vs * p
+        vs_t = vs_of_t(ti, swimmer_params)
+        x_dot = u + vs_t * p
         p_dot = jeffery_drift(p, beta, A)
 
         return x_dot, p_dot
@@ -555,7 +585,7 @@ def run_case_extended(
             if renormalize_each_substep:
                 p_new = normalize_vector(p_new)
 
-            x_new, p_new = enforce_channel_bc(x_new, p_new, flow_params)
+            x_new, p_new = enforce_channel_bc(x_curr, x_new, p_new, flow_params)
 
             x_curr = x_new
             p_curr = p_new
@@ -573,6 +603,8 @@ def run_case_extended(
     # Registro adicional de Umax(t), g(t) y gradiente de presión
     g_t = np.array([pressure_gradient_time_function(ti, flow_params) for ti in t])
     Umax_t = np.array([Umax_of_t(ti, flow_params) for ti in t])
+
+    vs_t_series = np.array([vs_of_t(ti, swimmer_params) for ti in t])
 
     result = {
         "mode": "deterministic_extended",
@@ -599,7 +631,9 @@ def run_case_extended(
         "x0": x0,
         "t_final": t_final,
         "flow_params": flow_params,
-        "vs": vs,
+        "vs0": swimmer_params.get("vs0", 0.0),
+        "vs_t": vs_t_series,
+        "swimmer_params": swimmer_params,
         "dt_output": dt_output,
         "dt_internal": h,
         "n_substeps": n_substeps,
@@ -639,7 +673,7 @@ def plot_jeffery_panels(
     beta = result["beta"]
     r = result["aspect_ratio"]
     case = result["case"]
-    vs = result.get("vs", None)
+    vs = result.get("vs0", 0.0)
 
     flow_latex = get_flow_latex(case, flow_params or result.get("flow_params", {}))
 
@@ -762,7 +796,7 @@ def plot_spatial_projections(
     case = result["case"]
     r = result["aspect_ratio"]
     beta = result["beta"]
-    vs = result.get("vs", 0.0)
+    vs = result.get("vs0", 0.0)
     flow_params = result.get("flow_params", {})
 
     H = flow_params.get("H", 2.0)
@@ -887,16 +921,19 @@ def plot_flow_modulation(
     lw=2.0
 ):
     """
-    Grafica una sola señal temporal:
+    Grafica en la misma figura:
+
+        Umax(t)  -> flujo
+        vs(t)    -> velocidad propia constante del nadador
+
+    Modelo:
 
         Umax(t) = U0 * g(t)
-
-    donde:
-      - U0 = flow_params["Umax"]
-      - g(t) depende de time_profile
+        vs(t)   = vs0
     """
     t = result["t"]
     Umax_t = result["Umax_t"]
+    vs_t = result.get("vs_t", None)
 
     flow_params = result.get("flow_params", {})
     profile = flow_params.get("time_profile", "constant")
@@ -906,22 +943,39 @@ def plot_flow_modulation(
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    ax.plot(t, Umax_t, linewidth=lw)
+    # ------------------------------------------------------------
+    # Flujo (línea principal)
+    # ------------------------------------------------------------
+    ax.plot(t, Umax_t, linewidth=lw, label=r"$U_{\max}(t)$")
+
+    # ------------------------------------------------------------
+    # Nadador (si existe)
+    # ------------------------------------------------------------
+    if vs_t is not None:
+        ax.plot(t, vs_t, linewidth=lw, linestyle="--", label=r"$v_s(t)$")
+
+    # ------------------------------------------------------------
+    # Estética
+    # ------------------------------------------------------------
     ax.set_xlabel(r"$t$")
-    ax.set_ylabel(r"$U_{\max}(t)$")
-    ax.set_title(r"Flow modulation")
+    ax.set_ylabel(r"Velocity scale")
+    ax.set_title(r"Flow vs swimmer modulation")
     ax.grid(True, alpha=0.3)
+    ax.legend()
 
     fig.suptitle(
-        rf"$U_{{\max}}(t)$ | profile = {profile}",
+        rf"$U_{{\max}}(t)$ and $v_s(t)$ | profile = {profile}",
         fontsize=13
     )
 
     plt.tight_layout()
 
+    # ------------------------------------------------------------
+    # Guardado
+    # ------------------------------------------------------------
     if save:
         if filename is None:
-            filename = f"flow_modulation_{profile}.png"
+            filename = f"flow_swimmer_modulation_{profile}.png"
 
         path = os.path.join(folder, filename)
         fig.savefig(path, dpi=500, bbox_inches="tight")
@@ -1156,6 +1210,149 @@ def plot_trajectory_on_sphere_interactive(
 
     plotter.show(auto_close=True)
 
+def plot_orientation_angle_histograms(
+    result,
+    bins=60,
+    smooth_overlay=True,
+    smooth_sigma=1.5,
+    figsize=(11.5, 4.6),
+    save=True,
+    folder="ResultsG",
+    filename=None
+):
+    """
+    Plots separate histograms of the orientation angles theta and phi.
+
+    theta: polar angle in degrees, measured from +z, range [0, 180]
+    phi  : azimuthal angle in degrees, measured from +x in the xy-plane, range [0, 360]
+
+    Also estimates and prints the preferential orientation based on the
+    maximum of the smoothed angular distributions.
+    """
+
+    theta_deg = result["theta_deg"]
+    phi_deg = (result["phi_deg_wrapped"] + 360.0) % 360.0
+    t_final = result["t_final"]
+
+    theta_edges = np.linspace(0.0, 180.0, bins + 1)
+    phi_edges = np.linspace(0.0, 360.0, bins + 1)
+
+    if save:
+        os.makedirs(folder, exist_ok=True)
+
+    fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+    # ------------------------------------------------------------
+    # Theta histogram
+    # ------------------------------------------------------------
+    counts_theta, edges_theta, _ = axs[0].hist(
+        theta_deg,
+        bins=theta_edges,
+        density=True,
+        alpha=0.75,
+        edgecolor="black",
+        linewidth=0.8
+    )
+
+    centers_theta = 0.5 * (edges_theta[:-1] + edges_theta[1:])
+
+    smooth_theta = gaussian_filter1d(
+        counts_theta,
+        sigma=smooth_sigma
+    )
+
+    if smooth_overlay:
+        axs[0].plot(
+            centers_theta,
+            smooth_theta,
+            linewidth=2.2,
+            label="Smoothed histogram"
+        )
+        axs[0].legend(frameon=False)
+
+    axs[0].set_xlim(0, 180)
+    axs[0].set_xticks([0, 30, 60, 90, 120, 150, 180])
+    axs[0].set_xlabel(r"Polar angle, $\theta$ [deg]")
+    axs[0].set_ylabel("Probability density")
+    axs[0].set_title(r"Distribution of $\theta$")
+    axs[0].grid(True, alpha=0.3)
+
+    # ------------------------------------------------------------
+    # Phi histogram
+    # ------------------------------------------------------------
+    counts_phi, edges_phi, _ = axs[1].hist(
+        phi_deg,
+        bins=phi_edges,
+        density=True,
+        alpha=0.75,
+        edgecolor="black",
+        linewidth=0.8
+    )
+
+    centers_phi = 0.5 * (edges_phi[:-1] + edges_phi[1:])
+
+    # Periodic smoothing because phi = 0 deg and phi = 360 deg
+    # represent the same azimuthal direction.
+    smooth_phi = gaussian_filter1d(
+        counts_phi,
+        sigma=smooth_sigma,
+        mode="wrap"
+    )
+
+    if smooth_overlay:
+        axs[1].plot(
+            centers_phi,
+            smooth_phi,
+            linewidth=2.2,
+            label="Smoothed histogram"
+        )
+        axs[1].legend(frameon=False)
+
+    axs[1].set_xlim(0, 360)
+    axs[1].set_xticks([0, 60, 120, 180, 240, 300, 360])
+    axs[1].set_xlabel(r"Azimuthal angle, $\phi$ [deg]")
+    axs[1].set_ylabel("Probability density")
+    axs[1].set_title(r"Distribution of $\phi$")
+    axs[1].grid(True, alpha=0.3)
+
+    # ------------------------------------------------------------
+    # Preferential orientation estimate
+    # ------------------------------------------------------------
+    theta_pref = centers_theta[np.argmax(smooth_theta)]
+    phi_pref = centers_phi[np.argmax(smooth_phi)]
+
+    print("\n" + "=" * 62)
+    print("Preferential orientation estimate")
+    print("=" * 62)
+    print(f"Preferred polar angle theta   : {theta_pref:.2f} deg")
+    print(f"Preferred azimuthal angle phi : {phi_pref:.2f} deg")
+    print("=" * 62)
+
+    area_theta = np.sum(counts_theta * np.diff(edges_theta))
+    area_phi = np.sum(counts_phi * np.diff(edges_phi))
+
+    print(f"Area theta histogram: {area_theta:.6f}")
+    print(f"Area phi histogram  : {area_phi:.6f}")
+
+    # ------------------------------------------------------------
+    # Global title
+    # ------------------------------------------------------------
+    fig.suptitle(
+        rf"Orientation angle distributions | Simulation time = {t_final:.1f} s | bins = {bins}",
+        fontsize=13
+    )
+
+    plt.tight_layout()
+
+    if save:
+        if filename is None:
+            filename = f"orientation_angle_histograms_bins{bins}_tf{t_final:.1f}.png"
+
+        path = os.path.join(folder, filename)
+        fig.savefig(path, dpi=500, bbox_inches="tight")
+        print(f"\nFigure saved at: {path}")
+
+    return fig, axs
 
 # =============================================================================
 # 11. EJECUCIÓN PRINCIPAL
@@ -1168,23 +1365,25 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # PARÁMETROS DE LA PARTÍCULA
     # -------------------------------------------------------------------------
-    r = 50 / 7  # Relación de aspecto
+    r = 50/7  # Relación de aspecto
     # Condiciones iniciales
-    theta0_deg = 5.0
-    phi0_deg = 5.0
-    x0 = np.array([0.0, 0.5, 0.5], dtype=float)
+    theta0_deg = 45
+    phi0_deg = 45
+    x0 = np.array([0.0, 0.6, 0], dtype=float)
 
     # -------------------------------------------------------------------------
     # PARÁMETROS TEMPORALES
     # -------------------------------------------------------------------------
-    t_final = 1000.0
+    t_final = 500.0
     n_points = 20000
     n_substeps = 5
 
     # -------------------------------------------------------------------------
     # PARÁMETROS DEL NADADOR
     # -------------------------------------------------------------------------
-    vs = 0.05  # Propulsión
+    swimmer_params = {
+        "vs0": 0.05,   # velocidad propia constante
+    }
 
     # -------------------------------------------------------------------------
     # PARÁMETROS DEL FLUJO
@@ -1198,8 +1397,8 @@ if __name__ == "__main__":
 
         # Perfil temporal g(t):
         #   Umax(t) = Umax * g(t)
-        "time_profile": "constant",   # constant, sinusoidal, cosine, square, ramp, pulse, custom
-        "modulation_amplitude": 1.0,    # epsilon
+        "time_profile": "sinusoidal",   # constant, sinusoidal, cosine, square, ramp, pulse, custom
+        "modulation_amplitude": 1,    # epsilon
 
         # sinusoidal / cosine / square:
         #   g(t) = 1 + epsilon * f(omega_t * t + phase_t)
@@ -1210,10 +1409,10 @@ if __name__ == "__main__":
         "period": 8.0 * np.pi,
 
         # square:
-        "square_sharpness": 20.0,
+        "square_sharpness": 25.0,
 
         # pulse:
-        "duty_cycle": 0.2,
+        "duty_cycle": 0.8,
 
         # si False: Umax(t) = max(Umax(t), 0)
         "allow_flow_reversal": True,
@@ -1235,7 +1434,7 @@ if __name__ == "__main__":
         t_final=t_final,
         n_points=n_points,
         flow_params=flow_params,
-        vs=vs,
+        swimmer_params=swimmer_params,
         n_substeps=n_substeps,
         renormalize_each_substep=True,
     )
@@ -1282,3 +1481,16 @@ if __name__ == "__main__":
         result,
         save_screenshot=False
     )
+
+    # -------------------------------------------------------------------------
+    # FIGURE 4: ORIENTATION ANGLE HISTOGRAMS
+    # -------------------------------------------------------------------------
+    fig4, axs4 = plot_orientation_angle_histograms(
+        result,
+        bins=250,
+        smooth_overlay=True,
+        smooth_sigma=1.5,
+        save=True,
+        filename="orientation_angle_histograms.png"
+    )
+    plt.show()
