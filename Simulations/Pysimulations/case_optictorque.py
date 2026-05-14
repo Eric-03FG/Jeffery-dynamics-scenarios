@@ -10,7 +10,13 @@ import src_Jeffery as jf
 # 1) shear parameter
 # ============================================================
 gamma = 1.0
-plane = "xy"              # "xy" o "xz"
+plane = "xy"              # "xy" o "xz" <------------ change
+
+# ============================================================
+# 1) extensional flow parameter
+# ============================================================
+epsilon_dot = 1.0
+#plane = "yz"              # "xy", "xz" o "yz" <-------- change
 
 # ============================================================
 # 2) Particle parameters
@@ -32,21 +38,22 @@ d0 = jf.sph_to_vec(theta0, phi0)
 # ============================================================
 # 4) Time
 # ============================================================
-t0, tf = 0.0, 2100.0
+t0, tf = 0.0, 3000.0
 n_points = 4000
 t_eval = np.linspace(t0, tf, n_points)
 
 # ============================================================
 # 5) PSEUDO Optic torque
 # ============================================================
-USE_OPTICAL = False        # Apagar o prender el torque xd (TRUE or FALSE)
-lambda_opt = 5.0e-3
-e_pol = np.array([1.0, 0.0, 0.0], dtype=float)
+USE_OPTICAL = True        # Apagar o prender el torque xd (TRUE or FALSE)
+lambda_opt = 5e-3
+e_pol = np.array([0.0, 1.0, 0.0], dtype=float)
 
 # ============================================================
 # 6) Shear
 # ============================================================
 G = jf.grad_u_simple_shear(gamma, plane=plane)
+#G = jf.grad_u_extensional(epsilon_dot, plane=plane)
 E, W = jf.decompose_grad_u(G)
 
 # ============================================================
@@ -93,114 +100,245 @@ theta_deg = np.rad2deg(theta_rad)
 phi_deg = np.rad2deg(phi_rad_unwrapped)
 norm_error = np.abs(norm_raw - 1.0)
 
+drift_h = jf.jeffery_rhs_vector(0.0, d0, E, W, lam)
+drift_o = jf.optical_alignment_drift(d0, e_pol=e_pol, lambda_opt=lambda_opt)
+
+print("||drift_hidrodinamico|| =", np.linalg.norm(drift_h))
+print("||drift_optico||       =", np.linalg.norm(drift_o))
+print("ratio opt/hid =", np.linalg.norm(drift_o) / np.linalg.norm(drift_h))
+
 # ============================================================
 # 8) Graphics 2x2
 # ============================================================
+
 if plane == "xy":
-    flow_label = f"u = ({gamma} y, 0, 0)"
+    flow_label_plain = f"u = ({gamma} y, 0, 0)"
+    flow_label_math = rf"$\mathbf{{u}} = ({gamma}y,\ 0,\ 0)$"
 elif plane == "xz":
-    flow_label = f"u = ({gamma} z, 0, 0)"
+    flow_label_plain = f"u = ({gamma} z, 0, 0)"
+    flow_label_math = rf"$\mathbf{{u}} = ({gamma}z,\ 0,\ 0)$"
 else:
-    flow_label = "simple shear"
+    flow_label_plain = "simple shear"
+    flow_label_math = r"$\mathbf{u}$"
+
+"""
+if plane == "xy":
+    flow_label_plain = f"u = ({epsilon_dot} x, -{epsilon_dot} y, 0)"
+    flow_label_math = rf"$\mathbf{{u}} = ({epsilon_dot}x,\ -{epsilon_dot}y,\ 0)$"
+elif plane == "xz":
+    flow_label_plain = f"u = ({epsilon_dot} x, 0, -{epsilon_dot} z)"
+    flow_label_math = rf"$\mathbf{{u}} = ({epsilon_dot}x,\ 0,\ -{epsilon_dot}z)$"
+elif plane == "yz":
+    flow_label_plain = f"u = (0, {epsilon_dot} y, -{epsilon_dot} z)"
+    flow_label_math = rf"$\mathbf{{u}} = (0,\ {epsilon_dot}y,\ -{epsilon_dot}z)$"
+else:
+    flow_label_plain = "extensional flow"
+    flow_label_math = r"$\mathbf{u}$"
+    """
 
 optical_label = "ON" if USE_OPTICAL else "OFF"
 
-title = (
-    f"Simple shear\n"
-    f"{flow_label}\n"
-    f"r = {r:.3f}, beta = {lam:.3f}, optical = {optical_label}, "
-    f"lambda_opt = {lambda_opt:.3e}"
+# Title
+suptitle = (
+    rf"$\dot{{\mathbf{{p}}}}\;|\; r = {r:.3f},\ \beta = {lam:.3f},\ \Lambda = {lambda_opt:.0e}$"
+    "\n"
+    + flow_label_math
+    + "\n"
+    + rf"$\mathrm{{optical}} = {optical_label}$"
 )
 
-fig, axs = plt.subplots(2, 2, figsize=(11, 7))
+fig, axs = plt.subplots(2, 2, figsize=(11, 7.4))
 
-axs[0, 0].plot(sol.t, d1, label="d1")
-axs[0, 0].plot(sol.t, d2, label="d2")
-axs[0, 0].plot(sol.t, d3, label="d3")
-axs[0, 0].set_xlabel("t")
-axs[0, 0].set_ylabel("d(t)")
-axs[0, 0].grid(True)
-axs[0, 0].legend()
-axs[0, 0].set_title(title)
+# -------------------------
+# (1) Components of p(t)
+# -------------------------
+axs[0, 0].plot(sol.t, d1, label=r"$p_x$", linewidth=1.7)
+axs[0, 0].plot(sol.t, d2, label=r"$p_y$", linewidth=1.7)
+axs[0, 0].plot(sol.t, d3, label=r"$p_z$", linewidth=1.7)
+axs[0, 0].set_title(r"Components of $\mathbf{p}(t)$", fontsize=12)
+axs[0, 0].set_xlabel(r"$t$", fontsize=11)
+axs[0, 0].set_ylabel(r"$\mathbf{p}(t)$", fontsize=11)
+axs[0, 0].grid(True, alpha=0.8)
+axs[0, 0].legend(fontsize=10)
 
-axs[0, 1].plot(sol.t, theta_deg, label=r"$\theta(t)$")
-axs[0, 1].set_xlabel("t")
-axs[0, 1].set_ylabel(r"$\theta$ [deg]")
-axs[0, 1].grid(True)
-axs[0, 1].legend()
+# -------------------------
+# (2) theta(t)
+# -------------------------
+axs[0, 1].plot(sol.t, theta_deg, label=r"$\theta(t)$", linewidth=1.8)
+axs[0, 1].set_title(r"$\theta(t)$", fontsize=12)
+axs[0, 1].set_xlabel(r"$t$", fontsize=11)
+axs[0, 1].set_ylabel(r"$\theta\ [^\circ]$", fontsize=11)
+axs[0, 1].grid(True, alpha=0.8)
+axs[0, 1].legend(fontsize=10)
 
-axs[1, 0].plot(sol.t, phi_deg, label=r"$\phi(t)$")
-axs[1, 0].set_xlabel("t")
-axs[1, 0].set_ylabel(r"$\phi$ [deg]")
-axs[1, 0].grid(True)
-axs[1, 0].legend()
+# -------------------------
+# (3) phi(t)
+# -------------------------
+axs[1, 0].plot(sol.t, phi_deg, label=r"$\phi(t)$", linewidth=1.8)
+axs[1, 0].set_title(r"$\phi(t)$", fontsize=12)
+axs[1, 0].set_xlabel(r"$t$", fontsize=11)
+axs[1, 0].set_ylabel(r"$\phi\ [^\circ]$", fontsize=11)
+axs[1, 0].grid(True, alpha=0.8)
+axs[1, 0].legend(fontsize=10)
 
-axs[1, 1].plot(sol.t, np.maximum(norm_error, 1e-16), label=r"$|\|d\|-1|$")
+# -------------------------
+# (4) norma ||p(t)||
+# -------------------------
+norm_p = np.linalg.norm(P, axis=1)
+
+axs[1, 1].plot(sol.t, np.maximum(norm_error, 1e-16), label=r"$\|\mathbf{p}\|$", linewidth=1.6)
 axs[1, 1].set_yscale("log")
-axs[1, 1].set_xlabel("t")
-axs[1, 1].set_ylabel(r"$|\|d\|-1|$")
-axs[1, 1].grid(True)
-axs[1, 1].legend()
+axs[1, 1].set_title(r"$\|\mathbf{p}(t)\|$", fontsize=12)
+axs[1, 1].set_xlabel(r"$t$", fontsize=11)
+axs[1, 1].set_ylabel(r"$\|\mathbf{p}\|$", fontsize=11)
+axs[1, 1].grid(True, alpha=0.8)
+axs[1, 1].legend(fontsize=10)
 
-plt.tight_layout()
+fig.suptitle(suptitle, fontsize=15, y=0.98)
+
+
+plt.tight_layout(rect=[0, 0, 1, 1])
 plt.show()
 
 # ============================================================
-# 9) 3D 
+# 9) 3D
 # ============================================================
 plotter = pv.Plotter(window_size=(1100, 800))
 plotter.set_background("white")
 
-# Esfera unitaria
-sphere = pv.Sphere(radius=1.0, theta_resolution=80, phi_resolution=80)
+
+if plane == "xy":
+    flow_label_3d = f"u = ({gamma:g}y, 0, 0)"
+elif plane == "xz":
+    flow_label_3d = f"u = ({gamma:g}z, 0, 0)"
+else:
+    flow_label_3d = "simple shear"
+"""
+if plane == "xy":
+    flow_label_3d = f"u = ({epsilon_dot:g}x, -{epsilon_dot:g}y, 0)"
+elif plane == "xz":
+    flow_label_3d = f"u = ({epsilon_dot:g}x, 0, -{epsilon_dot:g}z)"
+elif plane == "yz":
+    flow_label_3d = f"u = (0, {epsilon_dot:g}y, -{epsilon_dot:g}z)"
+else:
+    flow_label_3d = "extensional flow"
+    """
+
+optical_label = "ON" if USE_OPTICAL else "OFF"
+lambda_display = lambda_opt if USE_OPTICAL else 0.0
+
+title_3d = (
+    "p(t) on S^2\n"
+    f"{flow_label_3d}\n"
+    f"r = {r:.3f}, beta = {lam:.3f}, Lambda = {lambda_display:g}\n"
+    f"optical = {optical_label}"
+)
+
+# ------------------------------------------------------------
+# Unit sphere
+# ------------------------------------------------------------
+sphere = pv.Sphere(
+    radius=1.0,
+    theta_resolution=80,
+    phi_resolution=80
+)
+
 plotter.add_mesh(
     sphere,
     color="lightgray",
     opacity=0.22,
     smooth_shading=True,
+    specular=0.15,
     show_edges=False
 )
 
-# Trayectoria p(t)
+# ------------------------------------------------------------
+# Trayectory p(t)
+# ------------------------------------------------------------
 polyline = pv.lines_from_points(P)
+
 plotter.add_mesh(
     polyline,
     color="red",
-    line_width=4
+    line_width=4,
+    label="p(t)"
 )
 
-# Vector inicial y final
+# ------------------------------------------------------------
+# Initial and final vector
+# ------------------------------------------------------------
 p0 = jf.normalize_vector(P[0])
 pf = jf.normalize_vector(P[-1])
 
-arr0 = pv.Arrow(
+theta0_check = np.rad2deg(np.arccos(np.clip(p0[2], -1.0, 1.0)))
+phi0_check = np.rad2deg(np.arctan2(p0[1], p0[0]))
+
+thetaf_check = np.rad2deg(np.arccos(np.clip(pf[2], -1.0, 1.0)))
+phif_check = np.rad2deg(np.arctan2(pf[1], pf[0]))
+
+print("p0 =", p0)
+print("||p0|| =", np.linalg.norm(p0))
+print("theta0 =", theta0_check, "deg")
+print("phi0 =", phi0_check, "deg")
+print()
+print("pf =", pf)
+print("||pf|| =", np.linalg.norm(pf))
+print("thetaf =", thetaf_check, "deg")
+print("phif =", phif_check, "deg")
+
+# initial and final points
+start_pt = pv.PolyData(p0.reshape(1, 3))
+end_pt = pv.PolyData(pf.reshape(1, 3))
+
+plotter.add_mesh(
+    start_pt,
+    color="green",
+    point_size=8,
+    render_points_as_spheres=True
+)
+
+plotter.add_mesh(
+    end_pt,
+    color="blue",
+    point_size=8,
+    render_points_as_spheres=True
+)
+
+# Initial arrow (green)
+arrow_t0 = pv.Arrow(
     start=(0.0, 0.0, 0.0),
     direction=p0,
-    scale=0.9,
-    shaft_radius=0.02,
+    tip_length=0.22,
     tip_radius=0.05,
-    tip_length=0.12
+    shaft_radius=0.018,
+    scale=0.98
 )
-plotter.add_mesh(arr0, color="green")
 
-arrf = pv.Arrow(
+plotter.add_mesh(
+    arrow_t0,
+    color="green"
+)
+
+# Final arrow (blue)
+arrow_tf = pv.Arrow(
     start=(0.0, 0.0, 0.0),
     direction=pf,
-    scale=0.9,
-    shaft_radius=0.02,
+    tip_length=0.22,
     tip_radius=0.05,
-    tip_length=0.12
+    shaft_radius=0.018,
+    scale=0.98
 )
-plotter.add_mesh(arrf, color="blue")
 
-# Puntos inicial y final
-start_pt = pv.PolyData(np.array([p0]))
-end_pt = pv.PolyData(np.array([pf]))
-plotter.add_mesh(start_pt, color="green", point_size=14, render_points_as_spheres=True)
-plotter.add_mesh(end_pt, color="blue", point_size=14, render_points_as_spheres=True)
+plotter.add_mesh(
+    arrow_tf,
+    color="blue"
+)
 
-# Campo de velocidad en un plano
-grid = np.linspace(-1.0, 1.0, 9)
+# ------------------------------------------------------------
+# Velocity field
+# ------------------------------------------------------------
+grid = np.linspace(-1.0, 1.0, 11)
+
 points = []
 vectors = []
 
@@ -210,57 +348,86 @@ for a in grid:
             X = np.array([a, b, 0.0])
         elif plane == "xz":
             X = np.array([a, 0.0, b])
+        elif plane == "yz":
+            X = np.array([0.0, a, b])
         else:
             X = np.array([a, b, 0.0])
 
         u = G @ X
+
         points.append(X)
         vectors.append(u)
 
 points = np.array(points)
 vectors = np.array(vectors)
 
-mags = np.linalg.norm(vectors, axis=1)
-max_mag = np.max(mags) if np.max(mags) > 0 else 1.0
-vectors_plot = vectors / max_mag * 0.35
+mesh = pv.PolyData(points)
+mesh["velocity"] = vectors
 
-pdata = pv.PolyData(points)
-pdata["vectors"] = vectors_plot
-
-arrows = pdata.glyph(
-    orient="vectors",
-    scale=False,
-    factor=1.0,
-    geom=pv.Arrow(
-        start=(0.0, 0.0, 0.0),
-        direction=(1.0, 0.0, 0.0),
-        scale=1.0,
-        shaft_radius=0.01,
-        tip_radius=0.03,
-        tip_length=0.10
-    )
+glyphs = mesh.glyph(
+    orient="velocity",
+    scale="velocity",
+    factor=0.3
 )
-plotter.add_mesh(arrows, color="black")
 
-# Ejes y rejilla
-plotter.add_axes()
-plotter.show_grid()
-
-
-text = (
-    "p(t) on S^2\n"
-    f"{flow_label}\n"
-    f"r = {r:.3f}, beta = {lam:.3f}\n"
-    f"optical = {optical_label}, lambda_opt = {lambda_opt:.3e}\n"
-    f"e_pol = ({e_pol[0]:.3f}, {e_pol[1]:.3f}, {e_pol[2]:.3f})"
+plotter.add_mesh(
+    glyphs,
+    color="black",
+    opacity=0.85
 )
-plotter.add_text(text, position="upper_left", font_size=12, color="black")
 
-legend_entries = [
-    ["p(t)", "red"],
-    ["t_0", "green"],
-    ["t_f", "blue"],
-]
-plotter.add_legend(legend_entries, bcolor="white", face="circle")
+# ------------------------------------------------------------
+# axys and boxes
+# ------------------------------------------------------------
+plotter.add_axes(
+    line_width=3,
+    cone_radius=0.08,
+    shaft_length=0.75,
+    tip_length=0.25,
+    ambient=0.5,
+    xlabel="x",
+    ylabel="y",
+    zlabel="z"
+)
+
+plotter.show_bounds(
+    grid="front",
+    location="outer",
+    all_edges=True,
+    color="black",
+    xtitle="x",
+    ytitle="y",
+    ztitle="z",
+    font_size=18
+)
+
+# ------------------------------------------------------------
+# left upper text
+# ------------------------------------------------------------
+plotter.add_text(
+    title_3d,
+    font_size=16,
+    position="upper_left",
+    color="black"
+)
+
+# ------------------------------------------------------------
+# Legend
+# ------------------------------------------------------------
+plotter.add_legend(
+    labels=[
+        ["p(t)", "red"],
+        ["t_0", "green"],
+        ["t_f", "blue"]
+    ],
+    bcolor="white",
+    border=False,
+    face="circle",
+    size=(0.16, 0.14)
+)
+
+
+plotter.camera_position = "iso"
+plotter.camera.zoom(1.15)
 
 plotter.show()

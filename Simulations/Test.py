@@ -360,6 +360,7 @@ def optical_alignment_drift(p, e_pol=np.array([1.0, 0.0, 0.0]), lambda_opt=0.0):
 
     Modelo:
         U(p) = -(1/2) * Delta_alpha * E0^2 * (p · e_pol)^2
+        
 
     Tras absorber Delta_alpha * E0^2 / zeta_r en un parámetro efectivo
     lambda_opt [1/s], la contribución a p_dot queda:
